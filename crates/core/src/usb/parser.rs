@@ -62,23 +62,31 @@ pub fn stream_len(buf: &[u8], n: usize) -> Result<usize, HxError> {
     Ok(RESPONSE_PAYLOAD_OFFSET - RESPONSE_HEADER_SIZE + u32::from_le_bytes(len_bytes) as usize)
 }
 
-/// Decodes a response envelope (`{102: txn, 103: status, 104: result}`) and
-/// returns its result value, rejecting a non-zero status.
-fn response_result(payload: &[u8]) -> Result<rmpv::Value, HxError> {
-    let mut cursor = Cursor::new(payload);
-    let root = read_value(&mut cursor)?;
+/// Looks up an integer key in a MessagePack map; `None` when `map` is not a
+/// map or lacks the key.
+pub(crate) fn map_get(map: &rmpv::Value, key: u64) -> Option<&rmpv::Value> {
+    map.as_map()?
+        .iter()
+        .find(|(k, _)| k.as_u64() == Some(key))
+        .map(|(_, v)| v)
+}
 
-    let map = root
-        .as_map()
-        .ok_or_else(|| HxError::protocol(fl!("msgpack-response-not-map")))?;
+/// Decodes a response envelope (`{102: txn, 103: status, 104: result}`).
+fn decode_envelope(payload: &[u8]) -> Result<rmpv::Value, HxError> {
+    let envelope = read_value(&mut Cursor::new(payload))?;
+    if envelope.is_map() {
+        Ok(envelope)
+    } else {
+        Err(HxError::protocol(fl!("msgpack-response-not-map")))
+    }
+}
 
-    let lookup = |key: u64| {
-        map.iter()
-            .find(|(k, _)| k.as_u64() == Some(key))
-            .map(|(_, v)| v)
-    };
+/// Decodes a response envelope and returns its result value, rejecting a
+/// non-zero status.
+pub(crate) fn response_result(payload: &[u8]) -> Result<rmpv::Value, HxError> {
+    let envelope = decode_envelope(payload)?;
 
-    match lookup(MSGPACK_KEY_STATUS).and_then(rmpv::Value::as_u64) {
+    match map_get(&envelope, MSGPACK_KEY_STATUS).and_then(rmpv::Value::as_u64) {
         Some(0) | None => {}
         Some(status) => {
             return Err(HxError::protocol(fl!(
@@ -88,9 +96,21 @@ fn response_result(payload: &[u8]) -> Result<rmpv::Value, HxError> {
         }
     }
 
-    Ok(lookup(MSGPACK_KEY_RESULT)
+    Ok(map_get(&envelope, MSGPACK_KEY_RESULT)
         .cloned()
         .unwrap_or(rmpv::Value::Nil))
+}
+
+/// Returns the status code (key `103`) of a reply envelope, if present.
+///
+/// The meaning of the code depends on the command: the setlist reply uses
+/// `0` for success, while write commands (select, rename) report
+/// [`ACK_STATUS_OK`]. The raw code is returned so each caller can judge it.
+///
+/// [`ACK_STATUS_OK`]: crate::usb::protocol::ACK_STATUS_OK
+pub fn response_status(payload: &[u8]) -> Result<Option<u64>, HxError> {
+    let envelope = decode_envelope(payload)?;
+    Ok(map_get(&envelope, MSGPACK_KEY_STATUS).and_then(rmpv::Value::as_u64))
 }
 
 /// Parses the reply to the open-presets command into the device's setlists.
@@ -336,6 +356,37 @@ mod tests {
         let payload = b"\x83\x66\xCD\x03\xE9\x67\x05\x68\x90";
         let err = parse_setlists(payload).unwrap_err();
         assert!(matches!(err, HxError::Protocol(_)));
+    }
+
+    #[test]
+    fn response_status_reads_code_from_captured_select_ack() {
+        // HX Stomp ACK to a successful selection: {102: 1010, 103: 1, 104: nil}
+        let payload = b"\x83\x66\xCD\x03\xF2\x67\x01\x68\xC0";
+        assert_eq!(response_status(payload).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn response_status_reads_code_from_captured_rename_ack() {
+        // HX Stomp ACK to a successful rename: {102: 1005, 103: 1, 104: nil}
+        let payload = b"\x83\x66\xCD\x03\xED\x67\x01\x68\xC0";
+        assert_eq!(
+            response_status(payload).unwrap(),
+            Some(crate::usb::protocol::ACK_STATUS_OK)
+        );
+    }
+
+    #[test]
+    fn response_status_is_none_without_status_key() {
+        // {102: 1005}
+        assert_eq!(response_status(b"\x81\x66\xCD\x03\xED").unwrap(), None);
+    }
+
+    #[test]
+    fn response_status_rejects_non_map_envelope() {
+        assert!(matches!(
+            response_status(b"\x01"),
+            Err(HxError::Protocol(_))
+        ));
     }
 
     #[test]
