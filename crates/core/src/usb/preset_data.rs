@@ -19,7 +19,8 @@
 //!   type 2     path 2's input: { 15: split }
 //!   type 3     path 2's output: { 17: join }
 //!   type 6     block: { 24: { 23: dual, 25: model, 26: second model },
-//!                       10: enabled, 11: params, 12: second params }
+//!                       9: block type, 10: enabled, 11: params,
+//!                       12: second params }
 //!   type 8     empty position (body is nil)
 //!   other      not decoded yet (e.g. type 7, the looper); skipped
 //! params:     { 2: count, 3: …, 4: [values] }
@@ -60,6 +61,7 @@ const KEY_DUAL: u64 = 23;
 const KEY_MODEL_A: u64 = 25;
 const KEY_MODEL_B: u64 = 26;
 const KEY_ENABLED: u64 = 10;
+const KEY_BLOCK_TYPE: u64 = 9;
 const KEY_PARAMS_A: u64 = 11;
 const KEY_PARAMS_B: u64 = 12;
 /// Key of the split in path 2's input and of the join in its output.
@@ -73,6 +75,9 @@ const KEY_PARAM_VALUES: u64 = 4;
 
 /// Slot type of a regular block.
 const SLOT_TYPE_BLOCK: u64 = 6;
+
+/// Key of the new block's slot in the reply to adding or changing a block.
+const KEY_REPLY_SLOT: u64 = 24;
 
 /// Slots per signal path, as an index into the slot array.
 const SLOTS: usize = SLOTS_PER_PATH as usize;
@@ -181,6 +186,15 @@ fn path_split(slots: &[Value]) -> Option<PathSplit> {
     })
 }
 
+/// Parses the reply to adding a block or changing its model: the new
+/// block, `{13: slot, 24: {19: 6, 20: body}}`, placed at `position` of
+/// `path`.
+pub fn parse_block_reply(payload: &[u8], path: u8, position: u8) -> Result<Block, HxError> {
+    let result = response_result(payload)?;
+    let slot = get(&result, KEY_REPLY_SLOT).ok_or_else(|| invalid("new block"))?;
+    parse_slot(slot, path, position)?.ok_or_else(|| invalid("new block"))
+}
+
 /// Parses one block position; `None` when it is empty.
 fn parse_slot(slot: &Value, path: u8, position: u8) -> Result<Option<Block>, HxError> {
     let slot_type = get(slot, KEY_SLOT_TYPE)
@@ -209,6 +223,9 @@ fn parse_slot(slot: &Value, path: u8, position: u8) -> Result<Option<Block>, HxE
                 position,
                 kind,
                 enabled: enabled(body),
+                block_type: get(body, KEY_BLOCK_TYPE)
+                    .and_then(Value::as_u64)
+                    .and_then(|t| u8::try_from(t).ok()),
                 params: params(get(body, KEY_PARAMS_A)),
                 cab_params: params(get(body, KEY_PARAMS_B)),
             }
@@ -342,6 +359,24 @@ mod tests {
         0x00, 0x1F, 0x6D, 0xAB, b'N', b'e', b'w', b' ', b'P', b'r', b'e', b's', b'e', b't', 0x00,
         0x75, 0xC2, 0x53, 0x92, 0xCD, 0x1E, 0xF8, 0x00, 0x5C, 0x00,
     ];
+
+    /// Reply to replacing slot 1's model with Minotaur (100), captured from
+    /// HX Edit on an HX Stomp.
+    const SET_MODEL_REPLY: &[u8] = &[
+        0x83, 0x66, 0xCD, 0x03, 0xF4, 0x67, 0x00, 0x68, 0x82, 0x0D, 0x01, 0x18, 0x82, 0x13, 0x06,
+        0x14, 0x85, 0x18, 0x83, 0x17, 0xC2, 0x19, 0x64, 0x1A, 0xFF, 0x09, 0x01, 0x0A, 0xC3, 0x0B,
+        0x83, 0x02, 0x03, 0x03, 0x03, 0x04, 0x93, 0xCA, 0x3E, 0xD7, 0x0A, 0x3D, 0xCA, 0x3F, 0x07,
+        0xAE, 0x14, 0xCA, 0x3F, 0x19, 0x99, 0x9A, 0x0C, 0x83, 0x02, 0x00, 0x03, 0x00, 0x04, 0x90,
+    ];
+
+    #[test]
+    fn block_reply_yields_the_new_block_with_defaults() {
+        let block = parse_block_reply(SET_MODEL_REPLY, 0, 0).unwrap();
+        assert_eq!(block.kind, BlockKind::Model(100));
+        assert!(block.enabled);
+        assert_eq!(block.params.len(), 3);
+        assert!(block.param_defs().is_some());
+    }
 
     #[test]
     fn captured_blocks_match_their_parameter_definitions() {

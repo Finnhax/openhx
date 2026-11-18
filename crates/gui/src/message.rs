@@ -1,5 +1,5 @@
 use openhx_core::{
-    ActivePreset, BlockCategory, ParamAddress, ParamValue, Preset, PresetChain, Setlist,
+    ActivePreset, Block, BlockCategory, ParamAddress, ParamValue, Preset, PresetChain, Setlist,
 };
 
 #[derive(Debug, Clone)]
@@ -56,6 +56,15 @@ pub enum Message {
     BlockEnabledToggled(u8, u8, bool),
     /// The device applied an edit, or refused it.
     EditWritten(Result<(), String>),
+    /// The user picked a model in the module list: the selected block gets
+    /// it, or an empty selected position gets a new block with it.
+    ModelChosen(u16),
+    /// The user asked to remove the selected block.
+    RemoveBlockRequested,
+    /// The device created or changed a block, or refused to.
+    BlockReplaced(Result<Block, String>),
+    /// The device removed the block at `(path, position)`, or refused to.
+    BlockRemoved(u8, u8, Result<(), String>),
     /// The user asked to save the active preset with its edits.
     SaveRequested,
     /// The device saved the active preset, or refused to.

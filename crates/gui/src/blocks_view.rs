@@ -11,7 +11,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Theme};
 use openhx_core::{
-    Block, BlockCategory, ParamAddress, ParamDef, ParamKind, ParamValue, PathSplit,
+    Block, BlockCategory, BlockKind, ParamAddress, ParamDef, ParamKind, ParamValue, PathSplit,
     blocks::{POSITIONS_PER_PATH, models_in},
 };
 use openhx_i18n::fl;
@@ -274,9 +274,8 @@ fn block_box(
                 ..Default::default()
             }
         });
-    if block.is_some() {
-        tile = tile.on_press(Message::BlockSelected(path, position));
-    }
+    // Empty positions are selectable too, to add a block there.
+    tile = tile.on_press(Message::BlockSelected(path, position));
 
     tile.into()
 }
@@ -288,14 +287,19 @@ pub const MODULE_LIST_ID: &str = "module-list";
 
 /// Device type list, module name list and settings of the selected block.
 fn details(app: &App) -> Element<'_, Message> {
-    let Some(block) = app.blocks.selected_block() else {
+    let Some((path, position)) = app.blocks.selected else {
         return muted(fl!("block-hint"));
+    };
+    let block = app.blocks.selected_block();
+    let settings = match block {
+        Some(block) => settings_panel(block),
+        None => empty_position_panel(path, position),
     };
 
     let row = row![
         device_type_list(app, block).width(Length::FillPortion(2)),
         module_list(app, block).width(Length::FillPortion(3)),
-        settings_panel(block).width(Length::FillPortion(6)),
+        settings.width(Length::FillPortion(6)),
     ]
     .spacing(10)
     .height(Length::Fill);
@@ -308,7 +312,7 @@ fn details(app: &App) -> Element<'_, Message> {
 
 /// Every block category; the browsed one is highlighted and picking another
 /// shows its models.
-fn device_type_list<'a>(app: &App, block: &Block) -> iced::widget::Container<'a, Message> {
+fn device_type_list<'a>(app: &App, block: Option<&Block>) -> iced::widget::Container<'a, Message> {
     let browsed = app.blocks.browsed_category(block);
 
     let entries = BlockCategory::ALL
@@ -325,9 +329,14 @@ fn device_type_list<'a>(app: &App, block: &Block) -> iced::widget::Container<'a,
 }
 
 /// The models of the browsed category, with the block's own model
-/// highlighted. Read-only: picking a model is not possible yet.
-fn module_list<'a>(app: &App, block: &Block) -> iced::widget::Container<'a, Message> {
-    let current = block.model_id();
+/// highlighted. Picking one gives it to the block, or adds a block with it
+/// at an empty position.
+fn module_list<'a>(app: &App, block: Option<&Block>) -> iced::widget::Container<'a, Message> {
+    // The amp+cab list shows amps, the cab list an amp+cab block's cab.
+    let current = block.map(|b| match (app.blocks.browsed_category(Some(b)), &b.kind) {
+        (Some(BlockCategory::Cab), BlockKind::AmpCab { cab, .. }) => *cab,
+        _ => b.model_id(),
+    });
 
     let entries = app
         .blocks
@@ -335,7 +344,11 @@ fn module_list<'a>(app: &App, block: &Block) -> iced::widget::Container<'a, Mess
         .map_or(&[][..], models_in)
         .iter()
         .fold(column![].spacing(1), |col, model| {
-            col.push(list_entry(model.name, model.id == current, None))
+            col.push(list_entry(
+                model.name,
+                Some(model.id) == current,
+                Some(Message::ModelChosen(model.id)),
+            ))
         });
 
     list_panel(fl!("block-module-name"), entries, MODULE_LIST_ID)
@@ -403,7 +416,16 @@ fn settings_panel(block: &Block) -> iced::widget::Container<'_, Message> {
 
     let content = column![
         text(fl!("block-settings")).size(14),
-        row![text(location).size(13), space::horizontal(), enabled].align_y(Alignment::Center),
+        row![
+            text(location).size(13),
+            space::horizontal(),
+            enabled,
+            button(text(fl!("block-remove")).size(13))
+                .padding([3, 10])
+                .on_press(Message::RemoveBlockRequested),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
         muted(hint),
         scrollable(settings).height(Length::Fill),
     ]
@@ -411,6 +433,30 @@ fn settings_panel(block: &Block) -> iced::widget::Container<'_, Message> {
 
     container(content)
         .padding(10)
+        .height(Length::Fill)
+        .style(panel_style)
+}
+
+/// The settings column of an empty position: how to add a block there.
+fn empty_position_panel<'a>(path: u8, position: u8) -> iced::widget::Container<'a, Message> {
+    // Shown 1-based, like the device does.
+    let path_number: u32 = u32::from(path) + 1;
+    let position_number: u32 = u32::from(position) + 1;
+    let content = column![
+        text(fl!("block-settings")).size(14),
+        text(fl!(
+            "block-position",
+            path = path_number,
+            position = position_number
+        ))
+        .size(13),
+        muted(fl!("block-add-hint")),
+    ]
+    .spacing(8);
+
+    container(content)
+        .padding(10)
+        .width(Length::Fill)
         .height(Length::Fill)
         .style(panel_style)
 }

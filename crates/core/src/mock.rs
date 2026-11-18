@@ -1,5 +1,5 @@
 use crate::{
-    blocks::{ParamAddress, ParamValue, PresetChain, slot_index},
+    blocks::{Block, BlockCategory, BlockKind, ParamAddress, ParamValue, PresetChain, slot_index},
     client::DeviceClient,
     device::{PROFILE_HX_STOMP_XL, profile::DeviceProfile},
     error::HxError,
@@ -113,6 +113,34 @@ impl DeviceClient for MockClient {
         self.profile().ensure_edit_channel()?;
         slot_index(path, position)?;
         eprintln!("[mock] set_block_enabled(path={path}, position={position}, {enabled}) — OK");
+        Ok(())
+    }
+
+    /// Refuses for the same reason as [`Self::read_active_preset`];
+    /// otherwise returns the block with no parameters.
+    fn set_block_model(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError> {
+        self.profile().ensure_edit_channel()?;
+        slot_index(path, position)?;
+        Ok(Block {
+            path,
+            position,
+            kind: kind.clone(),
+            enabled: true,
+            block_type: kind.category().and_then(BlockCategory::block_type),
+            params: Vec::new(),
+            cab_params: Vec::new(),
+        })
+    }
+
+    /// Like [`Self::set_block_model`].
+    fn add_block(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError> {
+        self.set_block_model(path, position, kind)
+    }
+
+    /// Refuses for the same reason as [`Self::read_active_preset`].
+    fn remove_block(&self, path: u8, position: u8) -> Result<(), HxError> {
+        self.profile().ensure_edit_channel()?;
+        slot_index(path, position)?;
         Ok(())
     }
 

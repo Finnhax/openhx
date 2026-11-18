@@ -101,6 +101,16 @@ pub(crate) fn response_result(payload: &[u8]) -> Result<rmpv::Value, HxError> {
         .unwrap_or(rmpv::Value::Nil))
 }
 
+/// Response envelope key holding the transaction ID the reply answers.
+const MSGPACK_KEY_TXN: u64 = 102;
+
+/// Returns the transaction ID (key `102`) of a reply envelope, if the
+/// payload is one.
+pub(crate) fn response_txn(payload: &[u8]) -> Option<u64> {
+    let envelope = decode_envelope(payload).ok()?;
+    map_get(&envelope, MSGPACK_KEY_TXN).and_then(rmpv::Value::as_u64)
+}
+
 /// Returns the status code (key `103`) of a reply envelope, if present.
 ///
 /// The meaning of the code depends on the command: the setlist reply uses

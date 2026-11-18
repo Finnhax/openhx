@@ -1,5 +1,5 @@
 use crate::{
-    blocks::{ParamAddress, ParamValue, PresetChain},
+    blocks::{Block, BlockKind, ParamAddress, ParamValue, PresetChain},
     device::profile::DeviceProfile,
     error::HxError,
     models::{ActivePreset, Preset, Setlist},
@@ -75,6 +75,17 @@ pub trait DeviceClient: Send {
     /// Stores the active preset, with its edits, as `name` in `preset` (a
     /// slot within `setlist`).
     fn save_preset(&self, setlist: u8, preset: u8, name: &str) -> Result<(), HxError>;
+
+    /// Replaces the model of the block at `position` of `path` with `kind`
+    /// and returns the new block, its parameters at their defaults.
+    fn set_block_model(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError>;
+
+    /// Adds a block of `kind`, switched on, at the empty `position` of
+    /// `path` and returns it, its parameters at their defaults.
+    fn add_block(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError>;
+
+    /// Removes the block at `position` of `path`.
+    fn remove_block(&self, path: u8, position: u8) -> Result<(), HxError>;
 }
 
 /// Creates a [`DeviceClient`] for the given device, or auto-detects one.

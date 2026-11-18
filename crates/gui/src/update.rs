@@ -245,6 +245,82 @@ pub fn handle_message(app: &mut App, message: Message) -> Task<Message> {
             // The shown chain no longer matches the device; read it again.
             load_blocks(app, None)
         }
+        Message::ModelChosen(model) => {
+            let Some((path, position)) = app.blocks.selected else {
+                return Task::none();
+            };
+            let block = app.blocks.selected_block();
+            let adding = block.is_none();
+            let Some(kind) = app.blocks.chosen_kind(block, model) else {
+                app.blocks.edit_error = Some(fl!("block-amp-cab-needs-cab"));
+                return Task::none();
+            };
+            if block.is_some_and(|b| b.kind == kind) {
+                return Task::none();
+            }
+
+            info!(
+                "{} {kind:?} at {path}.{position}",
+                if adding { "Adding" } else { "Setting" }
+            );
+            app.blocks.edited = true;
+            app.blocks.edit_error = None;
+            device_task(
+                move |client| {
+                    if adding {
+                        client.add_block(path, position, &kind)
+                    } else {
+                        client.set_block_model(path, position, &kind)
+                    }
+                },
+                |result| Message::BlockReplaced(result.map_err(|e| e.to_string())),
+            )
+        }
+        Message::BlockReplaced(Ok(block)) => {
+            let blocks = &mut app.blocks;
+            let (path, position) = (block.path, block.position);
+            match blocks.block_mut(path, position) {
+                Some(existing) => *existing = block,
+                None => {
+                    blocks.chain.blocks.push(block);
+                    blocks
+                        .chain
+                        .blocks
+                        .sort_unstable_by_key(|b| (b.path, b.position));
+                }
+            }
+            blocks.browse_category = None;
+            scroll_lists_to_block(app)
+        }
+        Message::BlockReplaced(Err(err)) | Message::BlockRemoved(_, _, Err(err)) => {
+            error!("Failed to change the preset's blocks: {err}");
+            app.blocks.edit_error = Some(fl!("edit-failed", error = err));
+            load_blocks(app, None)
+        }
+        Message::RemoveBlockRequested => {
+            let Some((path, position)) = app.blocks.selected else {
+                return Task::none();
+            };
+            if app.blocks.selected_block().is_none() {
+                return Task::none();
+            }
+            info!("Removing block {path}.{position}");
+            app.blocks.edited = true;
+            app.blocks.edit_error = None;
+            device_task(
+                move |client| client.remove_block(path, position),
+                move |result| {
+                    Message::BlockRemoved(path, position, result.map_err(|e| e.to_string()))
+                },
+            )
+        }
+        Message::BlockRemoved(path, position, Ok(())) => {
+            app.blocks
+                .chain
+                .blocks
+                .retain(|b| (b.path, b.position) != (path, position));
+            Task::none()
+        }
         Message::SaveRequested => {
             let Some(active) = app.blocks.active.clone() else {
                 return Task::none();
@@ -285,7 +361,7 @@ fn scroll_lists_to_block(app: &App) -> Task<Message> {
     let Some(block) = app.blocks.selected_block() else {
         return Task::none();
     };
-    let Some(category) = app.blocks.browsed_category(block) else {
+    let Some(category) = app.blocks.browsed_category(Some(block)) else {
         return Task::none();
     };
 

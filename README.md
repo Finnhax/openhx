@@ -109,6 +109,11 @@ openhx-cli preset set-param --path 1 --position 3 --cab --param Distance --value
 # Switch a block on or off
 openhx-cli preset block-state --path 1 --position 3 --state off
 
+# Replace a block's model, add a block at an empty position, remove a block
+openhx-cli preset set-model --path 1 --position 2 --model "Minotaur (mono)"
+openhx-cli preset add-block --path 1 --position 6 --model "Adriatic Delay (mono)"
+openhx-cli preset remove-block --path 1 --position 6
+
 # Save the active preset with its changes
 openhx-cli preset save
 ```

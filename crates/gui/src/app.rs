@@ -1,7 +1,8 @@
 use crate::{message::Message, state::AppState, update, view, worker};
 use iced::{Subscription, Task};
 use openhx_core::{
-    ActivePreset, Block, BlockCategory, ParamAddress, ParamValue, Preset, PresetChain, Setlist,
+    ActivePreset, Block, BlockCategory, BlockKind, ParamAddress, ParamValue, Preset, PresetChain,
+    Setlist,
 };
 
 pub struct App {
@@ -67,8 +68,35 @@ impl BlocksState {
 
     /// The device type whose models the module list shows: the one picked
     /// in the type list, else `block`'s own.
-    pub fn browsed_category(&self, block: &Block) -> Option<BlockCategory> {
-        self.browse_category.or_else(|| block.category())
+    pub fn browsed_category(&self, block: Option<&Block>) -> Option<BlockCategory> {
+        self.browse_category
+            .or_else(|| block.and_then(Block::category))
+    }
+
+    /// The block a click on `model` in the module list asks for, given the
+    /// selected `block` (`None` for an empty position).
+    ///
+    /// Browsing amp+cab replaces the amp of an amp+cab block and browsing
+    /// cabs its cab; any other pick replaces the whole block. `None` when an
+    /// amp+cab block would need a cab that isn't known.
+    pub fn chosen_kind(&self, block: Option<&Block>, model: u16) -> Option<BlockKind> {
+        let current = block.map(|b| &b.kind);
+        match (self.browsed_category(block), current) {
+            (Some(BlockCategory::AmpCab), Some(BlockKind::AmpCab { cab, .. })) => {
+                Some(BlockKind::AmpCab {
+                    amp: model,
+                    cab: *cab,
+                })
+            }
+            (Some(BlockCategory::AmpCab), _) => None,
+            (Some(BlockCategory::Cab), Some(BlockKind::AmpCab { amp, .. })) => {
+                Some(BlockKind::AmpCab {
+                    amp: *amp,
+                    cab: model,
+                })
+            }
+            _ => Some(BlockKind::Model(model)),
+        }
     }
 }
 

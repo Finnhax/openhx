@@ -31,6 +31,9 @@ preset-save = Salvar
 preset-saving = Salvando...
 preset-unsaved = Alterações não salvas
 block-edit-hint = As alterações valem imediatamente; salve o preset para mantê-las.
+block-remove = Remover
+block-add-hint = Esta posição está vazia. Escolha um tipo de dispositivo e um modelo para adicionar um bloco aqui.
+block-amp-cab-needs-cab = Por enquanto um bloco amp+cab só pode ser alterado, não adicionado; adicione um amplificador e um gabinete.
 edit-failed = Falha ao alterar o preset: { $error }
 save-failed = Falha ao salvar o preset: { $error }
 
@@ -83,6 +86,21 @@ cli-param-set = { $param } alterado para { $value }.
 cli-block-state-set = Bloco P{ $path }.{ $position } { $state }.
 cli-unsaved-hint = A alteração vale imediatamente; use `preset save` para mantê-la.
 cli-preset-saved = "{ $name }" salvo na setlist { $setlist }, preset { $preset }.
+cli-set-model-about = Substitui o modelo de um bloco do preset ativo
+cli-set-model-long = Substitui o modelo do bloco no caminho e na posição informados. O novo modelo começa com os parâmetros padrão. Um novo amplificador mantém o gabinete de um bloco amp+cab, a menos que --with-cab indique outro.
+cli-add-block-about = Adiciona um bloco ao preset ativo
+cli-add-block-long = Adiciona um bloco com o modelo informado, ligado e com os parâmetros padrão, em um caminho e posição vazios.
+cli-remove-block-about = Remove um bloco do preset ativo
+cli-remove-block-long = Remove o bloco no caminho e na posição informados.
+cli-model-help = Nome do modelo como `preset blocks` o mostra (ex.: "Minotaur (mono)"; parte do nome funciona se for única), ou seu ID.
+cli-with-cab-help = Gabinete de um bloco amp+cab; --model então indica o amplificador.
+cli-model-not-found = Nenhum modelo corresponde a '{ $model }'.
+cli-model-ambiguous = '{ $model }' corresponde a vários modelos: { $candidates }.
+cli-amp-cab-mismatch = Um bloco amp+cab precisa de um amplificador em --model e de um gabinete em --with-cab.
+cli-position-taken = O caminho { $path }, posição { $position } já contém '{ $block }'.
+cli-model-set = P{ $path }.{ $position } agora é { $model }.
+cli-block-added = { $model } adicionado em P{ $path }.{ $position }.
+cli-block-removed = { $model } removido de P{ $path }.{ $position }.
 
 mock-mode-active = [mock] Rodando em modo simulado — hardware físico não é necessário.
 

@@ -157,6 +157,48 @@ pub enum PresetAction {
     },
 
     #[command(
+        about = fl!("cli-set-model-about"),
+        long_about = fl!("cli-set-model-long")
+    )]
+    SetModel {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+
+        #[command(flatten)]
+        block: BlockArg,
+
+        #[command(flatten)]
+        model: ModelArg,
+    },
+
+    #[command(
+        about = fl!("cli-add-block-about"),
+        long_about = fl!("cli-add-block-long")
+    )]
+    AddBlock {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+
+        #[command(flatten)]
+        block: BlockArg,
+
+        #[command(flatten)]
+        model: ModelArg,
+    },
+
+    #[command(
+        about = fl!("cli-remove-block-about"),
+        long_about = fl!("cli-remove-block-long")
+    )]
+    RemoveBlock {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+
+        #[command(flatten)]
+        block: BlockArg,
+    },
+
+    #[command(
         about = fl!("cli-save-preset-about"),
         long_about = fl!("cli-save-preset-long")
     )]
@@ -182,6 +224,16 @@ impl BlockArg {
     pub fn index(self) -> (u8, u8) {
         (self.path - 1, self.position - 1)
     }
+}
+
+/// The model of a block, by name or ID, with the cab of an amp+cab block.
+#[derive(clap::Args, Clone)]
+pub struct ModelArg {
+    #[arg(long, value_name = "MODEL", help = fl!("cli-model-help"))]
+    pub model: String,
+
+    #[arg(long = "with-cab", value_name = "CAB", help = fl!("cli-with-cab-help"))]
+    pub cab: Option<String>,
 }
 
 /// A block's state.

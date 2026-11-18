@@ -41,6 +41,19 @@ pub fn run() -> Result<(), HxError> {
                 block,
                 state,
             } => commands::preset::block_state::execute(device, block, state),
+            PresetAction::SetModel {
+                device,
+                block,
+                model,
+            } => commands::preset::block_model::set_model(device, block, &model),
+            PresetAction::AddBlock {
+                device,
+                block,
+                model,
+            } => commands::preset::block_model::add_block(device, block, &model),
+            PresetAction::RemoveBlock { device, block } => {
+                commands::preset::block_model::remove_block(device, block)
+            }
             PresetAction::Save { device } => commands::preset::save::execute(device),
         },
     }

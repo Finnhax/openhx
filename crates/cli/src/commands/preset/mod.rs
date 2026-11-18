@@ -1,4 +1,5 @@
 pub mod active;
+pub mod block_model;
 pub mod block_state;
 pub mod blocks;
 pub mod list;

@@ -1,3 +1,5 @@
+use crate::blocks::BlockKind;
+
 pub const EP_OUT: u8 = 0x01;
 pub const EP_IN: u8 = 0x81;
 pub const INTERFACE: u8 = 0;
@@ -357,6 +359,12 @@ pub const CMD_SET_PARAM: u8 = 30;
 pub const CMD_SET_BLOCK_ENABLED: u8 = 41;
 /// Command type that stores the active preset, with its edits, in a slot.
 pub const CMD_SAVE_PRESET: u8 = 71;
+/// Command type that removes a block.
+pub const CMD_REMOVE_BLOCK: u8 = 28;
+/// Command type that adds a block at an empty position.
+pub const CMD_ADD_BLOCK: u8 = 39;
+/// Command type that replaces a block's model.
+pub const CMD_SET_BLOCK_MODEL: u8 = 40;
 
 /// Argument keys of the edit-channel writes.
 const ARG_SLOT: u8 = 98;
@@ -368,6 +376,20 @@ const ARG_ENABLED: u8 = 59;
 const ARG_SETLIST: u8 = 107;
 const ARG_PRESET: u8 = 108;
 const ARG_NAME: u8 = 109;
+const ARG_NEW_BLOCK: u8 = 99;
+const ARG_MODELS: u8 = 100;
+
+/// Keys of a block's model map and of a new block's slot, as in the
+/// preset data (see [`crate::usb::preset_data`]).
+const KEY_AMP_CAB: u8 = 23;
+const KEY_MODEL_A: u8 = 25;
+const KEY_MODEL_B: u8 = 26;
+const KEY_SLOT_TYPE: u8 = 19;
+const KEY_SLOT_BODY: u8 = 20;
+const KEY_MODELS: u8 = 24;
+const KEY_BLOCK_TYPE: u8 = 9;
+const KEY_ENABLED: u8 = 10;
+const SLOT_TYPE_BLOCK: u8 = 6;
 
 /// Builds an edit-channel request `{102: txn, 100: command, 101: args}`.
 ///
@@ -451,6 +473,62 @@ pub fn build_set_block_enabled_request(slot: u8, enabled: bool) -> Vec<u8> {
     )
 }
 
+/// A block's model map: `{23: amp+cab, 25: model, 26: cab or -1}`.
+fn block_models(kind: &BlockKind) -> rmpv::Value {
+    let (amp_cab, model, cab) = match *kind {
+        BlockKind::Model(model) => (false, model, -1),
+        BlockKind::AmpCab { amp, cab } => (true, amp, i32::from(cab)),
+    };
+    rmpv::Value::Map(vec![
+        (KEY_AMP_CAB.into(), amp_cab.into()),
+        (KEY_MODEL_A.into(), model.into()),
+        (KEY_MODEL_B.into(), cab.into()),
+    ])
+}
+
+/// Builds a request replacing the model of the block in preset slot
+/// `slot` with `kind`. The device answers with the new block, its
+/// parameters at their defaults.
+pub fn build_set_block_model_request(slot: u8, kind: &BlockKind) -> Vec<u8> {
+    build_edit_request(
+        CMD_SET_BLOCK_MODEL,
+        vec![
+            (ARG_SLOT.into(), slot.into()),
+            (ARG_MODELS.into(), block_models(kind)),
+        ],
+    )
+}
+
+/// Builds a request adding a block of `kind` at the empty preset slot
+/// `slot`, switched on. `block_type` is the block's type (see
+/// [`BlockCategory::block_type`](crate::blocks::BlockCategory::block_type)). The device answers with
+/// the new block, its parameters at their defaults.
+pub fn build_add_block_request(slot: u8, kind: &BlockKind, block_type: u8) -> Vec<u8> {
+    let block = rmpv::Value::Map(vec![
+        (KEY_SLOT_TYPE.into(), SLOT_TYPE_BLOCK.into()),
+        (
+            KEY_SLOT_BODY.into(),
+            rmpv::Value::Map(vec![
+                (KEY_MODELS.into(), block_models(kind)),
+                (KEY_BLOCK_TYPE.into(), block_type.into()),
+                (KEY_ENABLED.into(), true.into()),
+            ]),
+        ),
+    ]);
+    build_edit_request(
+        CMD_ADD_BLOCK,
+        vec![
+            (ARG_SLOT.into(), slot.into()),
+            (ARG_NEW_BLOCK.into(), block),
+        ],
+    )
+}
+
+/// Builds a request removing the block in preset slot `slot`.
+pub fn build_remove_block_request(slot: u8) -> Vec<u8> {
+    build_edit_request(CMD_REMOVE_BLOCK, vec![(ARG_SLOT.into(), slot.into())])
+}
+
 /// Builds a request storing the active preset, with its edits, as `name`
 /// in `preset` (a slot within `setlist`).
 ///
@@ -523,6 +601,31 @@ mod tests {
         let len = u32::from_le_bytes(packet[20..24].try_into().unwrap()) as usize;
         // fixmap(3), key 102, uint16 txn
         &packet[24 + 5..24 + len]
+    }
+
+    const SET_MODEL_CAPTURED: &[u8] = &[
+        0x64, 0x28, 0x65, 0x82, 0x62, 0x01, 0x64, 0x83, 0x17, 0xC2, 0x19, 0x64, 0x1A, 0xFF,
+    ];
+    const ADD_TILT_CAPTURED: &[u8] = &[
+        0x64, 0x27, 0x65, 0x82, 0x62, 0x02, 0x63, 0x82, 0x13, 0x06, 0x14, 0x83, 0x18, 0x83, 0x17,
+        0xC2, 0x19, 0xCD, 0x02, 0x11, 0x1A, 0xFF, 0x09, 0x01, 0x0A, 0xC3,
+    ];
+    const REMOVE_CAPTURED: &[u8] = &[0x64, 0x1C, 0x65, 0x81, 0x62, 0x02];
+
+    #[test]
+    fn block_writes_match_captures() {
+        // Minotaur (100) in place of the block in slot 1.
+        let set_model = build_set_block_model_request(1, &BlockKind::Model(100));
+        assert_eq!(body_after_txn(&set_model), SET_MODEL_CAPTURED);
+
+        // Tilt (529) added at slot 2.
+        let add = build_add_block_request(2, &BlockKind::Model(529), 1);
+        assert_eq!(body_after_txn(&add), ADD_TILT_CAPTURED);
+
+        assert_eq!(
+            body_after_txn(&build_remove_block_request(2)),
+            REMOVE_CAPTURED
+        );
     }
 
     #[test]

@@ -1,13 +1,13 @@
 use super::{
     parser::{
         parse_msgpack_stream, parse_setlists, response_payload, response_result, response_status,
-        stream_len,
+        response_txn, stream_len,
     },
-    preset_data::{parse_active_preset, parse_active_preset_info},
+    preset_data::{parse_active_preset, parse_active_preset_info, parse_block_reply},
     protocol::*,
 };
 use crate::{
-    blocks::{ParamAddress, ParamValue, PresetChain, slot_index},
+    blocks::{Block, BlockCategory, BlockKind, ParamAddress, ParamValue, PresetChain, slot_index},
     client::DeviceClient,
     device::{KnownDevice, catalog::DEVICE_CATALOG, profile::DeviceProfile},
     error::HxError,
@@ -356,26 +356,64 @@ impl Client {
         Ok(active)
     }
 
-    /// Sends one edit-channel write in a fresh edit session and waits for
-    /// the device to confirm it.
+    /// Sends one edit-channel write in a fresh edit session and returns the
+    /// device's reply payload once it has confirmed the write.
     ///
-    /// Retrying is safe: every write sets a state, so applying it twice
-    /// leaves the device as applying it once.
-    fn run_edit_write(&self, request: &[u8], timeout: Duration) -> Result<(), HxError> {
+    /// A rejected write reports a non-zero status, which is returned as an
+    /// error. Retrying is safe for writes that set a state: applying them
+    /// twice leaves the device as applying them once.
+    fn run_edit_write(&self, request: &[u8], timeout: Duration) -> Result<Vec<u8>, HxError> {
         let mut buf = vec![0u8; STREAM_BUFFER_SIZE];
 
         self.open_edit_session(&mut buf, timeout)?;
 
         self.handle.write_bulk(EP_OUT, request, timeout)?;
-        let n = self.read_reply(Channel::Edit, READ_ACTIVE_PRESET_SEQ, &mut buf, timeout)?;
-        // A rejected write reports a non-zero status.
-        response_result(response_payload(&buf, n)?)?;
+        let payload = self.read_edit_result(EDIT_WRITE_TXN, &mut buf, timeout)?;
+        response_result(&payload)?;
 
         // The device broadcasts the change on its notification channel;
         // clear it before the next operation.
         self.drain_stale_data();
 
-        Ok(())
+        Ok(payload)
+    }
+
+    /// Reads edit-channel packets until the reply to transaction `txn`
+    /// arrives and returns its payload.
+    ///
+    /// The device numbers its packets independently of the host. Writes
+    /// that take it a moment (adding a block, changing a model) are first
+    /// acknowledged header-only, and it may send keepalives in between, so
+    /// the reply's sequence number can run ahead of the request's. The
+    /// transaction ID it echoes identifies the reply instead.
+    fn read_edit_result(
+        &self,
+        txn: u16,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Vec<u8>, HxError> {
+        for _ in 0..=MAX_STALE_DROPS {
+            let n = self.handle.read_bulk(EP_IN, buf, timeout)?;
+            if n > RESPONSE_HEADER_SIZE && Channel::Edit.owns_reply(buf, n) {
+                let payload = response_payload(buf, n)?;
+                if response_txn(payload) == Some(u64::from(txn)) {
+                    return Ok(payload.to_vec());
+                }
+            }
+            tracing::debug!(
+                len = n,
+                hex = format!("{:02X?}", &buf[..n.min(16)]),
+                "discarding packet while waiting for an edit result",
+            );
+        }
+        Err(HxError::Usb(rusb::Error::Timeout))
+    }
+
+    /// The preset slot of `position` in `path`, on a device whose edit
+    /// channel is supported.
+    fn block_slot(&self, path: u8, position: u8) -> Result<u8, HxError> {
+        self.profile.ensure_edit_channel()?;
+        slot_index(path, position)
     }
 
     /// Opens resource 6 on the edit channel.
@@ -692,12 +730,14 @@ impl DeviceClient for Client {
         };
         let request = build_set_param_request(slot, u8::from(address.cab), address.index, value);
         self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+            .map(drop)
     }
 
     fn set_block_enabled(&self, path: u8, position: u8, enabled: bool) -> Result<(), HxError> {
         self.profile.ensure_edit_channel()?;
         let request = build_set_block_enabled_request(slot_index(path, position)?, enabled);
         self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+            .map(drop)
     }
 
     fn save_preset(&self, setlist: u8, preset: u8, name: &str) -> Result<(), HxError> {
@@ -707,6 +747,33 @@ impl DeviceClient for Client {
         validate_preset_name(name)?;
         let request = build_save_preset_request(setlist, preset, name);
         self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+            .map(drop)
+    }
+
+    fn set_block_model(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError> {
+        let slot = self.block_slot(path, position)?;
+        let request = build_set_block_model_request(slot, kind);
+        let reply = self.with_retries(|timeout| self.run_edit_write(&request, timeout))?;
+        parse_block_reply(&reply, path, position)
+    }
+
+    fn add_block(&self, path: u8, position: u8, kind: &BlockKind) -> Result<Block, HxError> {
+        let slot = self.block_slot(path, position)?;
+        // The device derives the type from the model; `1` is a fine hint
+        // where it depends on the model.
+        let block_type = kind
+            .category()
+            .and_then(BlockCategory::block_type)
+            .unwrap_or(1);
+        let request = build_add_block_request(slot, kind, block_type);
+        let reply = self.with_retries(|timeout| self.run_edit_write(&request, timeout))?;
+        parse_block_reply(&reply, path, position)
+    }
+
+    fn remove_block(&self, path: u8, position: u8) -> Result<(), HxError> {
+        let request = build_remove_block_request(self.block_slot(path, position)?);
+        self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+            .map(drop)
     }
 }
 

@@ -159,7 +159,7 @@ Path 2's input slot (type `2`) holds the split under key `15`, and its output sl
 ```
 {
   24: { 23: dual, 25: model_a, 26: model_b },
-   9: …,
+   9: block type,
   10: enabled,
   11: params_a,
   12: params_b,
@@ -171,6 +171,7 @@ Path 2's input slot (type `2`) holds the split under key `15`, and its output sl
 | `24.23` | bool | `true` for an amp+cab block |
 | `24.25` | uint | Model ID; the amp of an amp+cab block |
 | `24.26` | int | The cab of an amp+cab block; `-1` otherwise |
+| `9` | uint | Block type, derived from the model (see [edit.md](./edit.md#block-types)) |
 | `10` | bool | Block is on |
 | `11` | map | Parameters of model A |
 | `12` | map | Parameters of model B (the cab); empty otherwise |

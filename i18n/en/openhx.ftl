@@ -31,6 +31,9 @@ preset-save = Save
 preset-saving = Saving...
 preset-unsaved = Unsaved changes
 block-edit-hint = Changes apply at once; save the preset to keep them.
+block-remove = Remove
+block-add-hint = This position is empty. Pick a device type and a model to add a block here.
+block-amp-cab-needs-cab = An amp+cab block can only be changed, not added, for now; add an amp and a cab instead.
 edit-failed = Changing the preset failed: { $error }
 save-failed = Saving the preset failed: { $error }
 
@@ -83,6 +86,21 @@ cli-param-set = { $param } set to { $value }.
 cli-block-state-set = Block P{ $path }.{ $position } switched { $state }.
 cli-unsaved-hint = The change applies at once; run `preset save` to keep it.
 cli-preset-saved = Saved "{ $name }" to setlist { $setlist }, preset { $preset }.
+cli-set-model-about = Replaces the model of a block in the active preset
+cli-set-model-long = Replaces the model of the block at the given path and position. The new model starts with its default parameters. A new amp keeps the cab of an amp+cab block unless --with-cab names another.
+cli-add-block-about = Adds a block to the active preset
+cli-add-block-long = Adds a block with the given model, switched on and with default parameters, at an empty path and position.
+cli-remove-block-about = Removes a block from the active preset
+cli-remove-block-long = Removes the block at the given path and position.
+cli-model-help = Model name as `preset blocks` shows it (e.g. "Minotaur (mono)"; part of a name works if it is unique), or its ID.
+cli-with-cab-help = Cab for an amp+cab block; --model then names the amp.
+cli-model-not-found = No model matches '{ $model }'.
+cli-model-ambiguous = '{ $model }' matches several models: { $candidates }.
+cli-amp-cab-mismatch = An amp+cab block needs an amp as --model and a cab as --with-cab.
+cli-position-taken = Path { $path }, position { $position } already holds '{ $block }'.
+cli-model-set = P{ $path }.{ $position } is now { $model }.
+cli-block-added = Added { $model } at P{ $path }.{ $position }.
+cli-block-removed = Removed { $model } from P{ $path }.{ $position }.
 
 mock-mode-active = [mock] Running in mock mode — no hardware required.
 

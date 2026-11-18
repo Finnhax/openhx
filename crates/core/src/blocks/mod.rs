@@ -73,6 +73,31 @@ impl BlockCategory {
         }
     }
 
+    /// The block type (key `9` of a block in the preset data) the device
+    /// gives blocks of this category, as observed on an HX Stomp; `None`
+    /// where it depends on the model (pitch shifters `1` but synth
+    /// generators `23`; a send `26`, a return `3`, an FX loop `10`).
+    ///
+    /// Adding a block sends the type, as HX Edit does, but the device
+    /// derives it from the model and corrects a wrong one.
+    pub fn block_type(self) -> Option<u8> {
+        match self {
+            Self::Distortion
+            | Self::Dynamic
+            | Self::Eq
+            | Self::Modulation
+            | Self::Filter
+            | Self::Wah
+            | Self::VolumePan => Some(1),
+            Self::Delay | Self::Reverb => Some(8),
+            Self::Cab => Some(15),
+            Self::Amp | Self::Preamp => Some(17),
+            Self::AmpCab => Some(18),
+            Self::ImpulseResponse => Some(19),
+            Self::PitchSynth | Self::SendReturn => None,
+        }
+    }
+
     /// A short tag that fits under a block in the signal chain.
     pub fn abbreviation(self) -> &'static str {
         match self {
@@ -138,6 +163,24 @@ pub fn models_in(category: BlockCategory) -> &'static [&'static Model] {
         other => other,
     };
     BY_CATEGORY.get(&wanted).map_or(&[], Vec::as_slice)
+}
+
+/// Finds models by name, ignoring case: the exact name if one matches
+/// (`Minotaur (mono)`), else every model whose name contains `query`
+/// (`minotaur` finds both its mono and stereo variants).
+pub fn find_models(query: &str) -> Vec<&'static Model> {
+    let query = query.trim().to_lowercase();
+    let exact: Vec<_> = MODELS
+        .iter()
+        .filter(|m| m.name.to_lowercase() == query)
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    MODELS
+        .iter()
+        .filter(|m| m.name.to_lowercase().contains(&query))
+        .collect()
 }
 
 /// Looks up a model by the ID the device reports for it.
@@ -417,6 +460,16 @@ pub enum BlockKind {
     AmpCab { amp: u16, cab: u16 },
 }
 
+impl BlockKind {
+    /// The block's category, if its model is known.
+    pub fn category(&self) -> Option<BlockCategory> {
+        match *self {
+            Self::Model(id) => model_info(id).map(|m| m.category),
+            Self::AmpCab { .. } => Some(BlockCategory::AmpCab),
+        }
+    }
+}
+
 /// A processing block in one of the preset's signal paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -427,6 +480,9 @@ pub struct Block {
     pub kind: BlockKind,
     /// Whether the block is switched on.
     pub enabled: bool,
+    /// The block's type as the device stores it (see
+    /// [`BlockCategory::block_type`]), if it reported one.
+    pub block_type: Option<u8>,
     /// Parameter values of the block's model, in device order.
     pub params: Vec<ParamValue>,
     /// Parameter values of the cab of a [`BlockKind::AmpCab`] block.
@@ -436,10 +492,7 @@ pub struct Block {
 impl Block {
     /// The block's category, if its model is known.
     pub fn category(&self) -> Option<BlockCategory> {
-        match self.kind {
-            BlockKind::Model(id) => model_info(id).map(|m| m.category),
-            BlockKind::AmpCab { .. } => Some(BlockCategory::AmpCab),
-        }
+        self.kind.category()
     }
 
     /// The ID of the model that defines the block: the model itself, or the
@@ -607,6 +660,7 @@ mod tests {
             position: 0,
             kind,
             enabled: true,
+            block_type: None,
             params: vec![],
             cab_params: vec![],
         }
@@ -773,6 +827,14 @@ mod tests {
         chain.split = None;
         assert_eq!(chain.path2_span(), Some(PathSplit { split: 0, join: 8 }));
         assert!(chain.block_at(1, 0).is_some());
+    }
+
+    #[test]
+    fn find_models_prefers_an_exact_name() {
+        let ids = |q| find_models(q).iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids("Minotaur (mono)"), [100]);
+        assert_eq!(ids("minotaur").len(), 2);
+        assert!(ids("no such model").is_empty());
     }
 
     #[test]
