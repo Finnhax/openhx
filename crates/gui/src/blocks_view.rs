@@ -6,11 +6,12 @@
 
 use crate::{app::App, message::Message};
 use iced::widget::{
-    Space, button, column, container, progress_bar, row, scrollable, space, stack, text,
+    Space, button, column, container, progress_bar, row, scrollable, slider, space, stack, text,
+    toggler,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Theme};
 use openhx_core::{
-    Block, BlockCategory, ParamDef, ParamValue, PathSplit,
+    Block, BlockCategory, ParamAddress, ParamDef, ParamKind, ParamValue, PathSplit,
     blocks::{POSITIONS_PER_PATH, models_in},
 };
 use openhx_i18n::fl;
@@ -58,16 +59,34 @@ pub fn panel(app: &App) -> Element<'_, Message> {
         .padding([5, 12])
         .on_press_maybe((!app.blocks.loading).then_some(Message::BlocksRequested));
 
-    let header = row![
-        text(fl!("blocks-title")).size(18),
-        space::horizontal(),
-        refresh
-    ]
-    .align_y(Alignment::Center);
+    let blocks = &app.blocks;
+    let save = button(
+        text(if blocks.saving {
+            fl!("preset-saving")
+        } else {
+            fl!("preset-save")
+        })
+        .size(13),
+    )
+    .padding([5, 12])
+    .on_press_maybe(
+        (blocks.edited && !blocks.saving && blocks.active.is_some())
+            .then_some(Message::SaveRequested),
+    );
+
+    let mut header = row![text(fl!("blocks-title")).size(18), space::horizontal()]
+        .spacing(10)
+        .align_y(Alignment::Center);
+    if blocks.edited {
+        header = header.push(muted(fl!("preset-unsaved")));
+    }
+    let header = header.push(save).push(refresh);
 
     let mut content = column![header].spacing(14).width(Length::Fill);
+    if let Some(err) = &blocks.edit_error {
+        content = content.push(error_text(err.clone()));
+    }
 
-    let blocks = &app.blocks;
     if blocks.loading {
         content = content.push(muted(fl!("blocks-loading")));
     }
@@ -324,11 +343,15 @@ fn module_list<'a>(app: &App, block: &Block) -> iced::widget::Container<'a, Mess
 
 /// The block's position, state and parameter values.
 fn settings_panel(block: &Block) -> iced::widget::Container<'_, Message> {
-    let state = if block.enabled {
-        fl!("block-on")
-    } else {
-        fl!("block-off")
-    };
+    let (path, position) = (block.path, block.position);
+    let enabled = toggler(block.enabled)
+        .label(if block.enabled {
+            fl!("block-on")
+        } else {
+            fl!("block-off")
+        })
+        .text_size(13)
+        .on_toggle(move |on| Message::BlockEnabledToggled(path, position, on));
 
     // Shown 1-based, like the device does.
     let path_number: u32 = u32::from(block.path) + 1;
@@ -339,33 +362,49 @@ fn settings_panel(block: &Block) -> iced::widget::Container<'_, Message> {
         position = position_number
     );
 
+    let address = |cab, index: usize| ParamAddress {
+        path,
+        position,
+        cab,
+        index: u8::try_from(index).unwrap_or(u8::MAX),
+    };
     // Parameters without a definition are numbered from 1.
     let params = block
         .params_with_defs()
-        .zip(1usize..)
-        .map(|((value, def), number)| {
+        .enumerate()
+        .map(|(i, (value, def))| {
+            let number: usize = i + 1;
             let label = def.map_or_else(
                 || fl!("block-param", number = number),
                 |d| d.name.to_owned(),
             );
-            param_row(label, value, def)
+            param_row(label, value, def, address(false, i))
         });
     let cab_params = block
         .cab_params_with_defs()
-        .zip(1usize..)
-        .map(|((value, def), number)| {
+        .enumerate()
+        .map(|(i, (value, def))| {
+            let number: usize = i + 1;
             let label = def.map_or_else(
                 || fl!("block-cab-param", number = number),
                 |d| fl!("block-cab-param-named", name = d.name),
             );
-            param_row(label, value, def)
+            param_row(label, value, def, address(true, i))
         });
     let settings = column(params.chain(cab_params)).spacing(6);
 
+    // Only parameters with a known definition can be changed.
+    let editable = block.param_defs().is_some() || block.cab_param_defs().is_some();
+    let hint = if editable {
+        fl!("block-edit-hint")
+    } else {
+        fl!("block-read-only")
+    };
+
     let content = column![
         text(fl!("block-settings")).size(14),
-        text(format!("{location} · {state}")).size(13),
-        muted(fl!("block-read-only")),
+        row![text(location).size(13), space::horizontal(), enabled].align_y(Alignment::Center),
+        muted(hint),
         scrollable(settings).height(Length::Fill),
     ]
     .spacing(8);
@@ -435,15 +474,75 @@ fn param_row<'a>(
     label: String,
     value: &ParamValue,
     def: Option<&ParamDef>,
+    address: ParamAddress,
 ) -> Element<'a, Message> {
-    // Without a definition only values that look like a 0–1 knob get a bar.
-    let fraction = match (def, value) {
-        (Some(def), _) => def.fraction(value),
-        (None, ParamValue::Float(v)) if (0.0..=1.0).contains(v) => Some(*v as f32),
-        (None, _) => None,
+    let shown = def.map_or_else(|| value.to_string(), |def| def.format(value));
+    let control = match def {
+        Some(def) => param_control(def, value, address),
+        None => value_bar(value),
     };
-    let bar: Element<'a, Message> = match fraction {
-        Some(fraction) => progress_bar(0.0..=1.0, fraction)
+
+    row![
+        text(label).size(13).width(150),
+        container(control).width(Length::Fill),
+        text(shown).size(13).width(80).align_x(Alignment::End),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// A control that changes a parameter: a switch for on/off parameters, a
+/// slider over the parameter's range otherwise.
+fn param_control<'a>(
+    def: &ParamDef,
+    value: &ParamValue,
+    address: ParamAddress,
+) -> Element<'a, Message> {
+    let changed = move |value, commit| Message::ParamChanged {
+        address,
+        value,
+        commit,
+    };
+
+    match (def.kind, value) {
+        (ParamKind::Bool { .. }, ParamValue::Bool(on)) => toggler(*on)
+            .on_toggle(move |on| changed(ParamValue::Bool(on), true))
+            .into(),
+        (ParamKind::Float { min, max, .. }, ParamValue::Float(v)) => {
+            // Knobs move in hundredths, like in HX Edit; wider ranges in
+            // 200 steps.
+            let step = if max - min <= 1.0 {
+                0.01
+            } else {
+                (max - min) / 200.0
+            };
+            slider(min..=max, *v, move |v| changed(ParamValue::Float(v), false))
+                .step(step)
+                .on_release(Message::ParamReleased)
+                .into()
+        }
+        (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => {
+            // Sliders work on `i32`; selector ranges are small.
+            let (Ok(min), Ok(max), Ok(v)) =
+                (i32::try_from(min), i32::try_from(max), i32::try_from(*v))
+            else {
+                return value_bar(value);
+            };
+            slider(min..=max, v, move |v| {
+                changed(ParamValue::Int(i64::from(v)), false)
+            })
+            .on_release(Message::ParamReleased)
+            .into()
+        }
+        _ => value_bar(value),
+    }
+}
+
+/// A read-only bar for values that look like a 0–1 knob; empty otherwise.
+fn value_bar<'a>(value: &ParamValue) -> Element<'a, Message> {
+    match value {
+        ParamValue::Float(v) if (0.0..=1.0).contains(v) => progress_bar(0.0..=1.0, *v as f32)
             .girth(8)
             .style(|_theme: &Theme| progress_bar::Style {
                 background: Color::from_rgb(0.22, 0.23, 0.25).into(),
@@ -454,19 +553,8 @@ fn param_row<'a>(
                 },
             })
             .into(),
-        None => Space::new().width(Length::Fill).into(),
-    };
-
-    let shown = def.map_or_else(|| value.to_string(), |def| def.format(value));
-
-    row![
-        text(label).size(13).width(150),
-        container(bar).width(Length::Fill),
-        text(shown).size(13).width(80).align_x(Alignment::End),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .into()
+        _ => Space::new().width(Length::Fill).into(),
+    }
 }
 
 /// A line of text in the error color.

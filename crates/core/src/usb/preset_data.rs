@@ -30,7 +30,9 @@
 //! before: `3` lies between the second and third position.
 
 use crate::{
-    blocks::{Block, BlockKind, POSITIONS_PER_PATH, ParamValue, PathSplit, PresetChain},
+    blocks::{
+        Block, BlockKind, POSITIONS_PER_PATH, ParamValue, PathSplit, PresetChain, SLOTS_PER_PATH,
+    },
     error::HxError,
     models::ActivePreset,
     usb::{
@@ -72,12 +74,13 @@ const KEY_PARAM_VALUES: u64 = 4;
 /// Slot type of a regular block.
 const SLOT_TYPE_BLOCK: u64 = 6;
 
-/// Slots per signal path: input, the block positions, output.
-const SLOTS_PER_PATH: usize = POSITIONS_PER_PATH as usize + 2;
+/// Slots per signal path, as an index into the slot array.
+const SLOTS: usize = SLOTS_PER_PATH as usize;
 
 /// Result keys of the active-preset-info reply.
 const KEY_INFO_SETLIST: u64 = 107;
 const KEY_INFO_PRESET: u64 = 108;
+const KEY_INFO_NAME: u64 = 109;
 
 /// Parses the reply to [`READ_ACTIVE_PRESET_INFO`] into the active preset.
 ///
@@ -97,8 +100,16 @@ pub fn parse_active_preset_info(
     let preset = field(KEY_INFO_PRESET)
         .filter(|p| u16::from(*p) < preset_count)
         .ok_or_else(|| invalid("active preset"))?;
+    let name = get(&result, KEY_INFO_NAME)
+        .and_then(Value::as_str)
+        .map(|name| name.trim_end_matches('\0').to_owned())
+        .unwrap_or_default();
 
-    Ok(ActivePreset { setlist, preset })
+    Ok(ActivePreset {
+        setlist,
+        preset,
+        name,
+    })
 }
 
 /// Parses the assembled active-preset stream into the preset's blocks.
@@ -128,8 +139,8 @@ pub fn parse_active_preset(stream: &[u8]) -> Result<PresetChain, HxError> {
 
     let mut blocks = Vec::new();
     for (index, slot) in slots.iter().enumerate() {
-        let path = index / SLOTS_PER_PATH;
-        let in_path = index % SLOTS_PER_PATH;
+        let path = index / SLOTS;
+        let in_path = index % SLOTS;
         // Slot 0 and the last slot of each path are its input and output.
         if !(1..=usize::from(POSITIONS_PER_PATH)).contains(&in_path) {
             continue;
@@ -165,8 +176,8 @@ fn path_split(slots: &[Value]) -> Option<PathSplit> {
     };
 
     Some(PathSplit {
-        split: gap(SLOTS_PER_PATH, KEY_SPLIT)?,
-        join: gap(2 * SLOTS_PER_PATH - 1, KEY_JOIN)?,
+        split: gap(SLOTS, KEY_SPLIT)?,
+        join: gap(2 * SLOTS - 1, KEY_JOIN)?,
     })
 }
 
@@ -350,7 +361,8 @@ mod tests {
             active,
             ActivePreset {
                 setlist: 0,
-                preset: 31
+                preset: 31,
+                name: "New Preset".to_owned(),
             }
         );
     }

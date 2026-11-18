@@ -1,5 +1,5 @@
 use crate::{
-    blocks::PresetChain,
+    blocks::{ParamAddress, ParamValue, PresetChain},
     device::profile::DeviceProfile,
     error::HxError,
     models::{ActivePreset, Preset, Setlist},
@@ -57,6 +57,24 @@ pub trait DeviceClient: Send {
     ///
     /// Only supported on the HX Stomp so far; other devices return an error.
     fn read_active_preset_blocks(&self) -> Result<PresetChain, HxError>;
+
+    /// Sets one parameter of a block in the active preset.
+    ///
+    /// The change takes effect at once but is kept only until another preset
+    /// is selected, unless the preset is saved with [`Self::save_preset`].
+    /// Callers check `value` against the parameter's
+    /// [`ParamDef`](crate::blocks::ParamDef) first; the device does not
+    /// report a bad value. Only supported on the HX Stomp so far.
+    fn set_block_param(&self, address: ParamAddress, value: &ParamValue) -> Result<(), HxError>;
+
+    /// Switches the block at `position` of `path` in the active preset on or
+    /// off. Like [`Self::set_block_param`], kept until the next preset change
+    /// unless saved.
+    fn set_block_enabled(&self, path: u8, position: u8, enabled: bool) -> Result<(), HxError>;
+
+    /// Stores the active preset, with its edits, as `name` in `preset` (a
+    /// slot within `setlist`).
+    fn save_preset(&self, setlist: u8, preset: u8, name: &str) -> Result<(), HxError>;
 }
 
 /// Creates a [`DeviceClient`] for the given device, or auto-detects one.

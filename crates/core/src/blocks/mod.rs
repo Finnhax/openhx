@@ -3,6 +3,7 @@
 #[rustfmt::skip]
 mod catalog;
 
+use crate::error::HxError;
 use catalog::MODELS;
 use openhx_i18n::fl;
 use std::collections::HashMap;
@@ -194,6 +195,79 @@ pub struct ParamDef {
 }
 
 impl ParamDef {
+    /// Checks that `value` has this parameter's type and lies in its range.
+    pub fn check(&self, value: &ParamValue) -> Result<(), HxError> {
+        let in_range = match (self.kind, value) {
+            (ParamKind::Float { min, max, .. }, ParamValue::Float(v)) => (min..=max).contains(v),
+            (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => (min..=max).contains(v),
+            (ParamKind::Bool { .. }, ParamValue::Bool(_)) => true,
+            _ => {
+                return Err(HxError::protocol(fl!(
+                    "param-value-wrong-type",
+                    param = self.name
+                )));
+            }
+        };
+        if in_range {
+            return Ok(());
+        }
+        let (min, max) = match self.kind {
+            ParamKind::Float { min, max, .. } => (
+                self.format(&ParamValue::Float(min)),
+                self.format(&ParamValue::Float(max)),
+            ),
+            ParamKind::Int { min, max, .. } => (
+                self.format(&ParamValue::Int(min)),
+                self.format(&ParamValue::Int(max)),
+            ),
+            ParamKind::Bool { .. } => unreachable!("switches are always in range"),
+        };
+        Err(HxError::protocol(fl!(
+            "param-value-out-of-range",
+            param = self.name,
+            min = min,
+            max = max
+        )))
+    }
+
+    /// Parses a value as [`ParamDef::format`] shows it (`4.5`, `50%`,
+    /// `120 ms`, `8 kHz`, `L20`, `on`, …) into the stored value, and checks
+    /// it with [`ParamDef::check`].
+    pub fn parse(&self, input: &str) -> Result<ParamValue, HxError> {
+        let invalid = || {
+            HxError::protocol(fl!(
+                "param-value-invalid",
+                value = input.to_owned(),
+                param = self.name
+            ))
+        };
+        let text = input.trim().to_lowercase();
+        let display = self.display;
+
+        let value = match self.kind {
+            ParamKind::Bool { .. } => match text.as_str() {
+                "on" | "true" | "1" => ParamValue::Bool(true),
+                "off" | "false" | "0" => ParamValue::Bool(false),
+                other if other == fl!("block-on") => ParamValue::Bool(true),
+                other if other == fl!("block-off") => ParamValue::Bool(false),
+                _ => return Err(invalid()),
+            },
+            ParamKind::Int { .. } => {
+                let v: i64 = text.parse().map_err(|_| invalid())?;
+                ParamValue::Int(if display == "integer_slider_1based" {
+                    v - 1
+                } else {
+                    v
+                })
+            }
+            ParamKind::Float { min, max, .. } => {
+                ParamValue::Float(parse_float(&text, display, min, max).ok_or_else(invalid)?)
+            }
+        };
+
+        self.check(&value)?;
+        Ok(value)
+    }
     /// Whether `value` has this parameter's type.
     pub fn accepts(&self, value: &ParamValue) -> bool {
         matches!(
@@ -258,6 +332,60 @@ impl ParamDef {
             _ => value.to_string(),
         }
     }
+}
+
+/// The inverse of [`ParamDef::format`] for floats; `None` when `text` is
+/// not a number in the parameter's display.
+fn parse_float(text: &str, display: &str, min: f64, max: f64) -> Option<f64> {
+    let number = |text: &str, units: &[&str]| -> Option<f64> {
+        let text = units
+            .iter()
+            .find_map(|unit| text.strip_suffix(unit))
+            .unwrap_or(text);
+        text.trim().parse().ok()
+    };
+
+    if display.contains("cut") && text == "off" {
+        return Some(if display.contains("low_cut") {
+            min
+        } else {
+            max
+        });
+    }
+    if display.contains("cut") || display.contains("freq") {
+        return match text.strip_suffix("khz") {
+            Some(khz) => number(khz, &[]).map(|v| v * 1000.0),
+            None => number(text, &["hz"]),
+        };
+    }
+    if display.contains("time_ms") {
+        return number(text, &["ms"]).map(|ms| ms / 1000.0);
+    }
+    if display.starts_with("percent") {
+        return number(text, &["%"]).map(|p| p / 100.0);
+    }
+    if display.starts_with("volume") {
+        return number(text, &["db"]);
+    }
+    if display == "pan" {
+        return match text.split_at_checked(1) {
+            _ if text == "c" => Some(0.5),
+            Some(("l", amount)) => number(amount, &[]).map(|a| 0.5 - a / 200.0),
+            Some(("r", amount)) => number(amount, &[]).map(|a| 0.5 + a / 200.0),
+            _ => None,
+        };
+    }
+    if display == "cab_mic_distance" {
+        return number(text, &["\""]);
+    }
+    if display == "CabMicIrs_Angle" {
+        return number(text, &["°"]);
+    }
+    if (min, max) == (0.0, 1.0) {
+        // Knobs run from 0 to 10 on the device.
+        return number(text, &[]).map(|v| v / 10.0);
+    }
+    number(text, &[])
 }
 
 fn format_frequency(hz: f64) -> String {
@@ -431,8 +559,43 @@ impl PresetChain {
     }
 }
 
+/// Number of signal paths in a preset.
+pub const PATH_COUNT: u8 = 2;
+
 /// Number of block positions in each signal path.
 pub const POSITIONS_PER_PATH: u8 = 8;
+
+/// Slots per path in the preset data: its input, the block positions and
+/// its output.
+pub(crate) const SLOTS_PER_PATH: u8 = POSITIONS_PER_PATH + 2;
+
+/// The preset-data slot of `position` in `path`, which edit commands use to
+/// address a block: path 1's positions are slots 1–8, path 2's 11–18.
+pub fn slot_index(path: u8, position: u8) -> Result<u8, HxError> {
+    if path < PATH_COUNT && position < POSITIONS_PER_PATH {
+        Ok(path * SLOTS_PER_PATH + position + 1)
+    } else {
+        let (path, position) = (u16::from(path) + 1, u16::from(position) + 1);
+        Err(HxError::protocol(fl!(
+            "block-position-out-of-range",
+            path = path,
+            position = position
+        )))
+    }
+}
+
+/// Addresses one parameter of a block in the active preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamAddress {
+    /// Signal path, `0` or `1`.
+    pub path: u8,
+    /// Position within the path, `0`–`7`.
+    pub position: u8,
+    /// `true` for a parameter of an amp+cab block's cab.
+    pub cab: bool,
+    /// Index into the model's parameters, in device order.
+    pub index: u8,
+}
 
 #[cfg(test)]
 mod tests {
@@ -610,6 +773,73 @@ mod tests {
         chain.split = None;
         assert_eq!(chain.path2_span(), Some(PathSplit { split: 0, join: 8 }));
         assert!(chain.block_at(1, 0).is_some());
+    }
+
+    #[test]
+    fn slot_index_numbers_both_paths_like_the_preset_data() {
+        assert_eq!(slot_index(0, 0).unwrap(), 1);
+        assert_eq!(slot_index(0, 3).unwrap(), 4);
+        assert_eq!(slot_index(1, 3).unwrap(), 14);
+        assert!(slot_index(2, 0).is_err());
+        assert!(slot_index(0, 8).is_err());
+    }
+
+    #[test]
+    fn param_defs_parse_values_as_they_are_shown() {
+        let def = |display, kind| ParamDef {
+            id: "x",
+            name: "x",
+            display,
+            kind,
+        };
+        let float = |min, max| ParamKind::Float {
+            min,
+            max,
+            default: min,
+        };
+        let parse = |d: ParamDef, s| d.parse(s).unwrap();
+
+        assert_eq!(
+            parse(def("generic_knob", float(0.0, 1.0)), "4.5"),
+            ParamValue::Float(0.45)
+        );
+        assert_eq!(
+            parse(def("percent", float(0.0, 1.0)), "50%"),
+            ParamValue::Float(0.5)
+        );
+        assert_eq!(
+            parse(def("time_ms", float(0.0, 2.0)), "470 ms"),
+            ParamValue::Float(0.47)
+        );
+        assert_eq!(
+            parse(def("cab_low_cut", float(19.9, 500.0)), "off"),
+            ParamValue::Float(19.9)
+        );
+        assert_eq!(
+            parse(def("cab_low_cut", float(19.9, 500.0)), "70 Hz"),
+            ParamValue::Float(70.0)
+        );
+        assert_eq!(
+            parse(def("cab_high_cut", float(500.0, 20100.0)), "8 kHz"),
+            ParamValue::Float(8000.0)
+        );
+        assert_eq!(
+            parse(def("pan", float(0.0, 1.0)), "L50"),
+            ParamValue::Float(0.25)
+        );
+        assert_eq!(
+            parse(def("volume", float(-60.0, 6.0)), "-3 dB"),
+            ParamValue::Float(-3.0)
+        );
+        assert_eq!(
+            parse(def("off_on", ParamKind::Bool { default: false }), "on"),
+            ParamValue::Bool(true)
+        );
+
+        let knob = def("generic_knob", float(0.0, 1.0));
+        assert!(knob.parse("11").is_err());
+        assert!(knob.parse("loud").is_err());
+        assert!(knob.check(&ParamValue::Bool(true)).is_err());
     }
 
     #[test]

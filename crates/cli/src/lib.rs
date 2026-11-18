@@ -29,6 +29,19 @@ pub fn run() -> Result<(), HxError> {
             } => commands::preset::rename::execute(device, setlist, preset, &name),
             PresetAction::Blocks { device } => commands::preset::blocks::execute(device),
             PresetAction::Active { device } => commands::preset::active::execute(device),
+            PresetAction::SetParam {
+                device,
+                block,
+                cab,
+                param,
+                value,
+            } => commands::preset::set_param::execute(device, block, cab, &param, &value),
+            PresetAction::BlockState {
+                device,
+                block,
+                state,
+            } => commands::preset::block_state::execute(device, block, state),
+            PresetAction::Save { device } => commands::preset::save::execute(device),
         },
     }
 }

@@ -340,6 +340,132 @@ pub fn build_rename_preset_request(seq: u8, setlist: u8, preset: u8, name: &str)
     packet
 }
 
+// Edit-channel writes
+//
+// Changing the active preset is done with single requests on the edit
+// channel, each the first request after opening it (seq
+// [`READ_ACTIVE_PRESET_SEQ`]). The device echoes the arguments (or `nil`)
+// with status `0` once it has applied the change, and broadcasts it on its
+// notification channel.
+
+/// Transaction ID sent with edit-channel writes; the device echoes it.
+pub const EDIT_WRITE_TXN: u16 = 1013;
+
+/// Command type (key `100`) that sets one parameter of a block.
+pub const CMD_SET_PARAM: u8 = 30;
+/// Command type that switches a block on or off.
+pub const CMD_SET_BLOCK_ENABLED: u8 = 41;
+/// Command type that stores the active preset, with its edits, in a slot.
+pub const CMD_SAVE_PRESET: u8 = 71;
+
+/// Argument keys of the edit-channel writes.
+const ARG_SLOT: u8 = 98;
+const ARG_MODEL: u8 = 26;
+const ARG_PARAM: u8 = 28;
+const ARG_PARAM_FLAG: u8 = 29;
+const ARG_VALUE: u8 = 119;
+const ARG_ENABLED: u8 = 59;
+const ARG_SETLIST: u8 = 107;
+const ARG_PRESET: u8 = 108;
+const ARG_NAME: u8 = 109;
+
+/// Builds an edit-channel request `{102: txn, 100: command, 101: args}`.
+///
+/// The packet length depends on the arguments, so it is assembled into a
+/// `Vec` and zero-padded to a 4-byte boundary like every captured request.
+pub fn build_edit_request(command: u8, args: Vec<(rmpv::Value, rmpv::Value)>) -> Vec<u8> {
+    let message = rmpv::Value::Map(vec![
+        (102.into(), EDIT_WRITE_TXN.into()),
+        (100.into(), command.into()),
+        (101.into(), rmpv::Value::Map(args)),
+    ]);
+    let mut payload = Vec::new();
+    rmpv::encode::write_value(&mut payload, &message).expect("writing to a Vec cannot fail");
+
+    let payload_len = payload.len() as u32;
+    // The framing prefix counts every byte after the routing field: the
+    // 16-byte seq/cmd + inner header plus the unpadded payload.
+    let [f0, f1, _, _] = (16 + payload_len).to_le_bytes();
+    let [r0, r1, r2, r3] = EDIT_ROUTING_OUT;
+    let [l0, l1, l2, l3] = payload_len.to_le_bytes();
+
+    let mut packet = vec![
+        f0,
+        f1,
+        0x00,
+        0x18, // Magic header with frame length
+        r0,
+        r1,
+        r2,
+        r3, // Edit-channel routing
+        0x00,
+        READ_ACTIVE_PRESET_SEQ,
+        0x00,
+        0x04, // Sequence and Command (0x04)
+        // Inner resource header
+        0x09,
+        0x10,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+        0x06,
+        0x00,
+        l0,
+        l1,
+        l2,
+        l3, // MsgPack payload length
+    ];
+    packet.extend_from_slice(&payload);
+    packet.resize(packet.len().next_multiple_of(4), 0x00);
+    packet
+}
+
+/// Builds a request setting parameter `param` of the block in preset slot
+/// `slot` (see [`crate::blocks::slot_index`]) to `value`.
+///
+/// `model` picks the block's model: `0` for a single model or the amp of an
+/// amp+cab block, `1` for its cab.
+pub fn build_set_param_request(slot: u8, model: u8, param: u8, value: rmpv::Value) -> Vec<u8> {
+    build_edit_request(
+        CMD_SET_PARAM,
+        vec![
+            (ARG_SLOT.into(), slot.into()),
+            // Always `true` in captured traffic, for any block and model.
+            (ARG_PARAM_FLAG.into(), true.into()),
+            (ARG_MODEL.into(), model.into()),
+            (ARG_PARAM.into(), param.into()),
+            (ARG_VALUE.into(), value),
+        ],
+    )
+}
+
+/// Builds a request switching the block in preset slot `slot` on or off.
+pub fn build_set_block_enabled_request(slot: u8, enabled: bool) -> Vec<u8> {
+    build_edit_request(
+        CMD_SET_BLOCK_ENABLED,
+        vec![
+            (ARG_SLOT.into(), slot.into()),
+            (ARG_ENABLED.into(), enabled.into()),
+        ],
+    )
+}
+
+/// Builds a request storing the active preset, with its edits, as `name`
+/// in `preset` (a slot within `setlist`).
+///
+/// Like a rename, the name is stored NUL-terminated.
+pub fn build_save_preset_request(setlist: u8, preset: u8, name: &str) -> Vec<u8> {
+    build_edit_request(
+        CMD_SAVE_PRESET,
+        vec![
+            (ARG_SETLIST.into(), setlist.into()),
+            (ARG_PRESET.into(), preset.into()),
+            (ARG_NAME.into(), format!("{name}\0").into()),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +501,48 @@ mod tests {
         0x09, 0x10, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x09, 0x00, 0x00, 0x00,
         0x83, 0x66, 0xCD, 0x04, 0x04, 0x64, 0x17, 0x65, 0xC0, 0x00, 0x00, 0x00,
     ];
+
+    /// MsgPack bodies of edit-channel writes captured from HX Edit, from the
+    /// command type on (the transaction IDs differ).
+    const SET_DRIVE_CAPTURED: &[u8] = &[
+        0x64, 0x1E, 0x65, 0x85, 0x62, 0x01, 0x1D, 0xC3, 0x1A, 0x00, 0x1C, 0x00, 0x77, 0xCA, 0x3E,
+        0xB3, 0x33, 0x33,
+    ];
+    const SET_CAB_DISTANCE_CAPTURED: &[u8] = &[
+        0x64, 0x1E, 0x65, 0x85, 0x62, 0x03, 0x1D, 0xC3, 0x1A, 0x01, 0x1C, 0x00, 0x77, 0xCA, 0x3F,
+        0xA0, 0x00, 0x00,
+    ];
+    const BYPASS_CAPTURED: &[u8] = &[0x64, 0x29, 0x65, 0x82, 0x62, 0x01, 0x3B, 0xC2];
+    const SAVE_CAPTURED: &[u8] = &[
+        0x64, 0x47, 0x65, 0x83, 0x6B, 0x00, 0x6C, 0x01, 0x6D, 0xA9, b'P', b'o', b'p', b'-', b'P',
+        b'u', b'n', b'k', 0x00,
+    ];
+
+    /// The MsgPack body of `packet` after `{102: txn,`.
+    fn body_after_txn(packet: &[u8]) -> &[u8] {
+        let len = u32::from_le_bytes(packet[20..24].try_into().unwrap()) as usize;
+        // fixmap(3), key 102, uint16 txn
+        &packet[24 + 5..24 + len]
+    }
+
+    #[test]
+    fn edit_writes_match_captures() {
+        let drive = build_set_param_request(1, 0, 0, rmpv::Value::F32(0.35));
+        assert_eq!(&drive[4..8], &EDIT_ROUTING_OUT);
+        assert_eq!(drive[SEQ_OFFSET], READ_ACTIVE_PRESET_SEQ);
+        assert_eq!(drive.len() % 4, 0);
+        assert_eq!(usize::from(drive[0]), 24 + 23 - 8);
+        assert_eq!(body_after_txn(&drive), SET_DRIVE_CAPTURED);
+
+        let distance = build_set_param_request(3, 1, 0, rmpv::Value::F32(1.25));
+        assert_eq!(body_after_txn(&distance), SET_CAB_DISTANCE_CAPTURED);
+
+        let bypass = build_set_block_enabled_request(1, false);
+        assert_eq!(body_after_txn(&bypass), BYPASS_CAPTURED);
+
+        let save = build_save_preset_request(0, 1, "Pop-Punk");
+        assert_eq!(body_after_txn(&save), SAVE_CAPTURED);
+    }
 
     #[test]
     fn edit_requests_match_captures() {

@@ -1,6 +1,8 @@
 use crate::{message::Message, state::AppState, update, view, worker};
 use iced::{Subscription, Task};
-use openhx_core::{Block, BlockCategory, Preset, PresetChain, Setlist};
+use openhx_core::{
+    ActivePreset, Block, BlockCategory, ParamAddress, ParamValue, Preset, PresetChain, Setlist,
+};
 
 pub struct App {
     pub state: AppState,
@@ -36,6 +38,16 @@ pub struct BlocksState {
     /// Device type picked in the type list; `None` follows the selected
     /// block's own type.
     pub browse_category: Option<BlockCategory>,
+    /// The preset the chain belongs to; saving stores it here.
+    pub active: Option<ActivePreset>,
+    /// A slider value not sent to the device yet, waiting for its release.
+    pub pending: Option<(ParamAddress, ParamValue)>,
+    /// `true` once the chain was changed since it was read or saved.
+    pub edited: bool,
+    /// `true` while the active preset is being saved.
+    pub saving: bool,
+    /// Why the last edit or save failed, if it did.
+    pub edit_error: Option<String>,
 }
 
 impl BlocksState {
@@ -43,6 +55,14 @@ impl BlocksState {
     pub fn selected_block(&self) -> Option<&Block> {
         let (path, position) = self.selected?;
         self.chain.block_at(path, position)
+    }
+
+    /// The block at `position` of `path`, to change it.
+    pub fn block_mut(&mut self, path: u8, position: u8) -> Option<&mut Block> {
+        self.chain
+            .blocks
+            .iter_mut()
+            .find(|b| b.path == path && b.position == position)
     }
 
     /// The device type whose models the module list shows: the one picked

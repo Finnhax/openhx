@@ -1,4 +1,6 @@
-use openhx_core::{ActivePreset, BlockCategory, Preset, PresetChain, Setlist};
+use openhx_core::{
+    ActivePreset, BlockCategory, ParamAddress, ParamValue, Preset, PresetChain, Setlist,
+};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -41,4 +43,21 @@ pub enum Message {
     BlockSelected(u8, u8),
     /// The user picked a device type to browse its models.
     DeviceTypeChosen(BlockCategory),
+    /// The user moved a parameter's control. A slider sends its value once
+    /// it is released; a switch (`commit`) at once.
+    ParamChanged {
+        address: ParamAddress,
+        value: ParamValue,
+        commit: bool,
+    },
+    /// The user released a parameter's slider.
+    ParamReleased,
+    /// The user switched the block at `(path, position)` on or off.
+    BlockEnabledToggled(u8, u8, bool),
+    /// The device applied an edit, or refused it.
+    EditWritten(Result<(), String>),
+    /// The user asked to save the active preset with its edits.
+    SaveRequested,
+    /// The device saved the active preset, or refused to.
+    PresetSaved(Result<(), String>),
 }

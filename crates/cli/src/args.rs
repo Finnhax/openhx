@@ -119,6 +119,76 @@ pub enum PresetAction {
         #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
         device: Option<DeviceArg>,
     },
+
+    #[command(
+        about = fl!("cli-set-param-about"),
+        long_about = fl!("cli-set-param-long")
+    )]
+    SetParam {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+
+        #[command(flatten)]
+        block: BlockArg,
+
+        #[arg(long, help = fl!("cli-cab-help"))]
+        cab: bool,
+
+        #[arg(long, value_name = "PARAM", help = fl!("cli-param-help"))]
+        param: String,
+
+        #[arg(long, value_name = "VALUE", allow_hyphen_values = true, help = fl!("cli-value-help"))]
+        value: String,
+    },
+
+    #[command(
+        about = fl!("cli-block-state-about"),
+        long_about = fl!("cli-block-state-long")
+    )]
+    BlockState {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+
+        #[command(flatten)]
+        block: BlockArg,
+
+        #[arg(long, value_enum, help = fl!("cli-state-help"))]
+        state: OnOff,
+    },
+
+    #[command(
+        about = fl!("cli-save-preset-about"),
+        long_about = fl!("cli-save-preset-long")
+    )]
+    Save {
+        #[arg(long, value_name = "DEVICE", help = fl!("cli-device-help"))]
+        device: Option<DeviceArg>,
+    },
+}
+
+/// A block of the active preset, as `preset blocks` numbers it (`P1.3` is
+/// path 1, position 3).
+#[derive(clap::Args, Clone, Copy)]
+pub struct BlockArg {
+    #[arg(long, value_name = "PATH", value_parser = clap::value_parser!(u8).range(1..=2), help = fl!("cli-path-help"))]
+    pub path: u8,
+
+    #[arg(long, value_name = "POSITION", value_parser = clap::value_parser!(u8).range(1..=8), help = fl!("cli-position-help"))]
+    pub position: u8,
+}
+
+impl BlockArg {
+    /// The 0-based `(path, position)` the core API uses.
+    pub fn index(self) -> (u8, u8) {
+        (self.path - 1, self.position - 1)
+    }
+}
+
+/// A block's state.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum OnOff {
+    On,
+    Off,
 }
 
 /// CLI-friendly wrapper around [`KnownDevice`] that implements [`clap::ValueEnum`].

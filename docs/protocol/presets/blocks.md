@@ -2,7 +2,7 @@
 
 This document describes how to read the blocks of the device's active preset — which model sits in each position of its signal paths, whether it is on, and its parameter values.
 
-> **Status:** Read-only, HX Stomp only. Validated on an HX Stomp (firmware 3.71); other models have not been tested, and openhx refuses to read their blocks until they are. The block layout follows the structure documented by the [helix_usb](https://github.com/kempline/helix_usb) project; how to *change* a parameter has not been captured yet.
+> **Status:** HX Stomp only. Validated on an HX Stomp (firmware 3.71); other models have not been tested, and openhx refuses to read their blocks until they are. The block layout follows the structure documented by the [helix_usb](https://github.com/kempline/helix_usb) project. Changing the preset is described in [edit.md](./edit.md).
 
 ---
 

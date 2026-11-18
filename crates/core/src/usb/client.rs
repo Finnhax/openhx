@@ -1,10 +1,13 @@
 use super::{
-    parser::{parse_msgpack_stream, parse_setlists, response_payload, response_status, stream_len},
+    parser::{
+        parse_msgpack_stream, parse_setlists, response_payload, response_result, response_status,
+        stream_len,
+    },
     preset_data::{parse_active_preset, parse_active_preset_info},
     protocol::*,
 };
 use crate::{
-    blocks::PresetChain,
+    blocks::{ParamAddress, ParamValue, PresetChain, slot_index},
     client::DeviceClient,
     device::{KnownDevice, catalog::DEVICE_CATALOG, profile::DeviceProfile},
     error::HxError,
@@ -353,6 +356,28 @@ impl Client {
         Ok(active)
     }
 
+    /// Sends one edit-channel write in a fresh edit session and waits for
+    /// the device to confirm it.
+    ///
+    /// Retrying is safe: every write sets a state, so applying it twice
+    /// leaves the device as applying it once.
+    fn run_edit_write(&self, request: &[u8], timeout: Duration) -> Result<(), HxError> {
+        let mut buf = vec![0u8; STREAM_BUFFER_SIZE];
+
+        self.open_edit_session(&mut buf, timeout)?;
+
+        self.handle.write_bulk(EP_OUT, request, timeout)?;
+        let n = self.read_reply(Channel::Edit, READ_ACTIVE_PRESET_SEQ, &mut buf, timeout)?;
+        // A rejected write reports a non-zero status.
+        response_result(response_payload(&buf, n)?)?;
+
+        // The device broadcasts the change on its notification channel;
+        // clear it before the next operation.
+        self.drain_stale_data();
+
+        Ok(())
+    }
+
     /// Opens resource 6 on the edit channel.
     fn open_edit_session(&self, buf: &mut [u8], timeout: Duration) -> Result<(), HxError> {
         self.handshake(Channel::Edit, buf, timeout)?;
@@ -648,6 +673,40 @@ impl DeviceClient for Client {
         self.profile.ensure_edit_channel()?;
         let stream = self.with_retries(|timeout| self.run_active_preset_session(timeout))?;
         parse_active_preset(&stream)
+    }
+
+    fn set_block_param(&self, address: ParamAddress, value: &ParamValue) -> Result<(), HxError> {
+        self.profile.ensure_edit_channel()?;
+        let slot = slot_index(address.path, address.position)?;
+        let value = match *value {
+            // The device stores knob values as float32.
+            ParamValue::Float(v) => rmpv::Value::F32(v as f32),
+            ParamValue::Int(v) => v.into(),
+            ParamValue::Bool(v) => v.into(),
+            ParamValue::Text(_) => {
+                return Err(HxError::protocol(fl!(
+                    "param-value-wrong-type",
+                    param = address.index
+                )));
+            }
+        };
+        let request = build_set_param_request(slot, u8::from(address.cab), address.index, value);
+        self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+    }
+
+    fn set_block_enabled(&self, path: u8, position: u8, enabled: bool) -> Result<(), HxError> {
+        self.profile.ensure_edit_channel()?;
+        let request = build_set_block_enabled_request(slot_index(path, position)?, enabled);
+        self.with_retries(|timeout| self.run_edit_write(&request, timeout))
+    }
+
+    fn save_preset(&self, setlist: u8, preset: u8, name: &str) -> Result<(), HxError> {
+        self.profile.ensure_edit_channel()?;
+        self.profile.validate_setlist(setlist)?;
+        self.profile.validate_preset(preset)?;
+        validate_preset_name(name)?;
+        let request = build_save_preset_request(setlist, preset, name);
+        self.with_retries(|timeout| self.run_edit_write(&request, timeout))
     }
 }
 

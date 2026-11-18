@@ -1,5 +1,5 @@
 use crate::{
-    blocks::PresetChain,
+    blocks::{ParamAddress, ParamValue, PresetChain, slot_index},
     client::DeviceClient,
     device::{PROFILE_HX_STOMP_XL, profile::DeviceProfile},
     error::HxError,
@@ -89,6 +89,7 @@ impl DeviceClient for MockClient {
         Ok(ActivePreset {
             setlist: 0,
             preset: 0,
+            name: MOCK_PRESET_NAMES[0].to_owned(),
         })
     }
 
@@ -97,6 +98,33 @@ impl DeviceClient for MockClient {
     fn read_active_preset_blocks(&self) -> Result<PresetChain, HxError> {
         self.profile().ensure_edit_channel()?;
         Ok(PresetChain::default())
+    }
+
+    /// Refuses for the same reason as [`Self::read_active_preset`].
+    fn set_block_param(&self, address: ParamAddress, value: &ParamValue) -> Result<(), HxError> {
+        self.profile().ensure_edit_channel()?;
+        slot_index(address.path, address.position)?;
+        eprintln!("[mock] set_block_param({address:?}, {value:?}) — OK");
+        Ok(())
+    }
+
+    /// Refuses for the same reason as [`Self::read_active_preset`].
+    fn set_block_enabled(&self, path: u8, position: u8, enabled: bool) -> Result<(), HxError> {
+        self.profile().ensure_edit_channel()?;
+        slot_index(path, position)?;
+        eprintln!("[mock] set_block_enabled(path={path}, position={position}, {enabled}) — OK");
+        Ok(())
+    }
+
+    /// Refuses for the same reason as [`Self::read_active_preset`].
+    fn save_preset(&self, setlist: u8, preset: u8, name: &str) -> Result<(), HxError> {
+        let profile = self.profile();
+        profile.ensure_edit_channel()?;
+        profile.validate_setlist(setlist)?;
+        profile.validate_preset(preset)?;
+        validate_preset_name(name)?;
+        eprintln!("[mock] save_preset(setlist={setlist}, preset={preset}, name={name:?}) — OK");
+        Ok(())
     }
 }
 

@@ -101,6 +101,16 @@ openhx-cli preset active
 
 # Show the blocks of the active preset, with their parameter values
 openhx-cli preset blocks
+
+# Change a parameter of the block at path 1, position 3 (values as `preset blocks` shows them)
+openhx-cli preset set-param --path 1 --position 3 --param Drive --value 4.5
+openhx-cli preset set-param --path 1 --position 3 --cab --param Distance --value 2
+
+# Switch a block on or off
+openhx-cli preset block-state --path 1 --position 3 --state off
+
+# Save the active preset with its changes
+openhx-cli preset save
 ```
 
 ### GUI

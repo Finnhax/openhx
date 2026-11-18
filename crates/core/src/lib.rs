@@ -9,7 +9,8 @@ pub mod usb;
 pub mod mock;
 
 pub use blocks::{
-    Block, BlockCategory, BlockKind, Model, ParamDef, ParamKind, ParamValue, PathSplit, PresetChain,
+    Block, BlockCategory, BlockKind, Model, ParamAddress, ParamDef, ParamKind, ParamValue,
+    PathSplit, PresetChain,
 };
 pub use client::{
     DeviceClient, connect_client, is_device_present, reset_shared_device, with_device,

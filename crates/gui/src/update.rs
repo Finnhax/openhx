@@ -8,9 +8,10 @@ use crate::{
 use iced::Task;
 use iced::widget::operation::{RelativeOffset, snap_to};
 use openhx_core::{
-    ActivePreset, BlockCategory, DeviceClient, HxError, PRESET_NAME_MAX_LEN, blocks::models_in,
-    reset_shared_device, validate_preset_name, with_device,
+    ActivePreset, BlockCategory, DeviceClient, HxError, PRESET_NAME_MAX_LEN, ParamAddress,
+    ParamValue, blocks::models_in, reset_shared_device, validate_preset_name, with_device,
 };
+use openhx_i18n::fl;
 use tracing::{debug, error, info};
 
 pub fn handle_message(app: &mut App, message: Message) -> Task<Message> {
@@ -162,9 +163,12 @@ pub fn handle_message(app: &mut App, message: Message) -> Task<Message> {
                 chain.blocks.len(),
                 chain.split
             );
-            let scroll = show_active_preset(app, active);
+            let scroll = show_active_preset(app, &active);
             let blocks = &mut app.blocks;
             blocks.chain = chain;
+            blocks.active = Some(active);
+            blocks.pending = None;
+            blocks.edited = false;
             blocks.loading = false;
             blocks.error = None;
             // Keep the selection only if that position still holds a block.
@@ -188,6 +192,89 @@ pub fn handle_message(app: &mut App, message: Message) -> Task<Message> {
         Message::DeviceTypeChosen(category) => {
             app.blocks.browse_category = Some(category);
             scroll_lists_to_block(app)
+        }
+        Message::ParamChanged {
+            address,
+            value,
+            commit,
+        } => {
+            let Some(block) = app.blocks.block_mut(address.path, address.position) else {
+                return Task::none();
+            };
+            let params = if address.cab {
+                &mut block.cab_params
+            } else {
+                &mut block.params
+            };
+            let Some(slot) = params.get_mut(usize::from(address.index)) else {
+                return Task::none();
+            };
+            *slot = value.clone();
+
+            if commit {
+                write_param(app, address, value)
+            } else {
+                app.blocks.pending = Some((address, value));
+                Task::none()
+            }
+        }
+        Message::ParamReleased => match app.blocks.pending.take() {
+            Some((address, value)) => write_param(app, address, value),
+            None => Task::none(),
+        },
+        Message::BlockEnabledToggled(path, position, enabled) => {
+            let Some(block) = app.blocks.block_mut(path, position) else {
+                return Task::none();
+            };
+            block.enabled = enabled;
+            app.blocks.edited = true;
+            app.blocks.edit_error = None;
+            info!(
+                "Switching block {path}.{position} {}",
+                if enabled { "on" } else { "off" }
+            );
+            device_task(
+                move |client| client.set_block_enabled(path, position, enabled),
+                |result| Message::EditWritten(result.map_err(|e| e.to_string())),
+            )
+        }
+        Message::EditWritten(Ok(())) => Task::none(),
+        Message::EditWritten(Err(err)) => {
+            error!("Failed to change the preset: {err}");
+            app.blocks.edit_error = Some(fl!("edit-failed", error = err));
+            // The shown chain no longer matches the device; read it again.
+            load_blocks(app, None)
+        }
+        Message::SaveRequested => {
+            let Some(active) = app.blocks.active.clone() else {
+                return Task::none();
+            };
+            if app.blocks.saving {
+                return Task::none();
+            }
+            info!(
+                "Saving setlist {}, slot {:03} as {:?}",
+                active.setlist, active.preset, active.name
+            );
+            app.blocks.saving = true;
+            device_task(
+                move |client| client.save_preset(active.setlist, active.preset, &active.name),
+                |result| Message::PresetSaved(result.map_err(|e| e.to_string())),
+            )
+        }
+        Message::PresetSaved(result) => {
+            app.blocks.saving = false;
+            match result {
+                Ok(()) => {
+                    app.blocks.edited = false;
+                    app.blocks.edit_error = None;
+                }
+                Err(err) => {
+                    error!("Failed to save the preset: {err}");
+                    app.blocks.edit_error = Some(fl!("save-failed", error = err));
+                }
+            }
+            Task::none()
         }
     }
 }
@@ -236,7 +323,7 @@ fn relative(index: usize, len: usize) -> RelativeOffset {
 ///
 /// Only presets of the shown setlist can be marked, and a rename in progress
 /// keeps its selection.
-fn show_active_preset(app: &mut App, active: ActivePreset) -> Task<Message> {
+fn show_active_preset(app: &mut App, active: &ActivePreset) -> Task<Message> {
     if active.setlist != app.setlist
         || app.rename_pending
         || app.selected_preset == Some(active.preset)
@@ -250,6 +337,17 @@ fn show_active_preset(app: &mut App, active: ActivePreset) -> Task<Message> {
     };
 
     snap_to(PRESET_LIST_ID, relative(position, app.presets.len()))
+}
+
+/// Sends a parameter's new value to the device.
+fn write_param(app: &mut App, address: ParamAddress, value: ParamValue) -> Task<Message> {
+    app.blocks.edited = true;
+    app.blocks.edit_error = None;
+    debug!("Setting {address:?} to {value:?}");
+    device_task(
+        move |client| client.set_block_param(address, &value),
+        |result| Message::EditWritten(result.map_err(|e| e.to_string())),
+    )
 }
 
 /// Reads which preset is active and its blocks, first switching to `select`

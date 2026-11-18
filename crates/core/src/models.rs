@@ -21,11 +21,13 @@ impl Preset {
 }
 
 /// The preset the device is currently playing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ActivePreset {
     pub setlist: u8,
     /// Slot within `setlist`.
     pub preset: u8,
+    /// The preset's name as stored in its slot.
+    pub name: String,
 }
 
 /// A named setlist: a bank of [`Preset`]s held by the device.

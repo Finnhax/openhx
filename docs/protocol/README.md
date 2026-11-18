@@ -26,6 +26,7 @@ This directory documents the USB bulk transfer protocol used to communicate with
 | [presets/select.md](./presets/select.md) | Make a preset the device's active preset |
 | [presets/rename.md](./presets/rename.md) | Store a new name for a preset |
 | [presets/blocks.md](./presets/blocks.md) | Read the active preset's blocks and parameters over the edit channel |
+| [presets/edit.md](./presets/edit.md) | Change parameters, switch blocks on/off and save the active preset |
 | [presets/data-format.md](./presets/data-format.md) | MessagePack payload format and preset data structure |
 
 ### Reference
